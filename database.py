@@ -26,6 +26,16 @@ class Database:
         cursor = self.get_cursor()
         
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channels (
+                id SERIAL PRIMARY KEY,
+                channel_name VARCHAR(255) UNIQUE NOT NULL,
+                channel_id VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 username VARCHAR(255),
@@ -307,20 +317,73 @@ class Database:
         finally:
             cursor.close()
     
-    def update_channel(self, channel_name: str, new_channel_id: str):
-        """Оновити посилання на канал"""
+    def get_all_channels(self):
+        """Отримати всі канали з БД"""
         cursor = self.get_cursor()
         try:
             cursor.execute("""
-                INSERT INTO channel_mappings (channel_name, channel_id, updated_at) 
-                VALUES (%s, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (channel_name) DO UPDATE 
-                SET channel_id = EXCLUDED.channel_id, 
-                    updated_at = CURRENT_TIMESTAMP
-            """, (channel_name, new_channel_id))
-            print(f"✅ Канал '{channel_name}' оновлено на '{new_channel_id}'")
+                SELECT channel_name, channel_id
+                FROM channels
+                ORDER BY channel_name
+            """)
+            
+            rows = cursor.fetchall()
+            channels = {}
+            for row in rows:
+                channels[row['channel_name']] = row['channel_id']
+            return channels
         except Exception as e:
-            print(f"Помилка оновлення каналу: {e}")
+            print(f"Помилка отримання каналів: {e}")
+            return {}
+        finally:
+            cursor.close()
+    
+    def add_channel(self, channel_name: str, channel_id: str):
+        """Додати новий канал"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO channels (channel_name, channel_id)
+                VALUES (%s, %s)
+            """, (channel_name, channel_id))
+            print(f"✅ Канал '{channel_name}' додано")
+            return True
+        except Exception as e:
+            print(f"Помилка додавання каналу: {e}")
+            return False
+        finally:
+            cursor.close()
+    
+    def delete_channel(self, channel_name: str):
+        """Видалити канал"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                DELETE FROM channels
+                WHERE channel_name = %s
+            """, (channel_name,))
+            print(f"✅ Канал '{channel_name}' видалено")
+            return True
+        except Exception as e:
+            print(f"Помилка видалення каналу: {e}")
+            return False
+        finally:
+            cursor.close()
+    
+    def update_channel(self, channel_name: str, new_channel_id: str):
+        """Оновити ID каналу"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                UPDATE channels 
+                SET channel_id = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE channel_name = %s
+            """, (new_channel_id, channel_name))
+            print(f"✅ ID каналу '{channel_name}' оновлено на '{new_channel_id}'")
+            return True
+        except Exception as e:
+            print(f"Помилка оновлення ID каналу: {e}")
+            return False
         finally:
             cursor.close()
     
@@ -339,6 +402,54 @@ class Database:
         except Exception as e:
             print(f"Помилка отримання маппінгу каналу: {e}")
             return None
+        finally:
+            cursor.close()
+    
+    def get_last_post_time(self, user_id: int):
+        """Отримати час останнього посту користувача"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                SELECT created_at
+                FROM posts 
+                WHERE user_id = %s
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (user_id,))
+            
+            row = cursor.fetchone()
+            if row:
+                return row['created_at']
+            return None
+        except Exception as e:
+            print(f"Помилка отримання часу останнього посту: {e}")
+            return None
+        finally:
+            cursor.close()
+    
+    def rename_channel(self, old_name: str, new_name: str):
+        """Перейменувати канал"""
+        cursor = self.get_cursor()
+        try:
+            # Оновлюємо всі пости зі старою назвою на нову
+            cursor.execute("""
+                UPDATE posts 
+                SET channel = %s
+                WHERE channel = %s
+            """, (new_name, old_name))
+            
+            # Оновлюємо назву в таблиці channels
+            cursor.execute("""
+                UPDATE channels 
+                SET channel_name = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE channel_name = %s
+            """, (new_name, old_name))
+            
+            print(f"✅ Канал '{old_name}' перейменовано на '{new_name}'")
+            return True
+        except Exception as e:
+            print(f"Помилка перейменування каналу: {e}")
+            return False
         finally:
             cursor.close()
     

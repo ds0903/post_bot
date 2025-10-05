@@ -1,65 +1,45 @@
 """
-Скрипт для синхронізації каналів з БД в config.py
+Скрипт для додавання каналів в базу даних
 """
+
 from database import Database
 
-def sync_channels_from_db():
-    """Завантажити оновлені канали з БД та оновити config.py"""
+def add_channels():
     db = Database()
-    cursor = db.get_cursor()
     
-    try:
-        cursor.execute("""
-            SELECT channel_name, channel_id 
-            FROM channel_mappings
-            ORDER BY channel_name
-        """)
+    # Приклади каналів - змініть на свої
+    channels = {
+        # "Назва каналу": "@channel_id або https://t.me/channel_id"
+    }
+    
+    print("🔧 Додавання каналів в базу даних...\n")
+    
+    if not channels:
+        print("❌ Немає каналів для додавання!")
+        print("📝 Відредагуйте файл sync_channels.py та додайте свої канали\n")
+        print("Приклад:")
+        print('channels = {')
+        print('    "Мій канал": "@my_channel",')
+        print('    "Новини": "https://t.me/news_channel"')
+        print('}')
+        return
+    
+    for channel_name, channel_id in channels.items():
+        # Нормалізуємо ID каналу
+        if 't.me/' in channel_id:
+            channel_id = '@' + channel_id.split('t.me/')[-1].strip('/')
         
-        mappings = cursor.fetchall()
-        
-        if mappings:
-            print("📋 Оновлені канали з БД:")
-            for mapping in mappings:
-                print(f"  {mapping['channel_name']}: {mapping['channel_id']}")
-            
-            # Читаємо config.py
-            with open('config.py', 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # Шукаємо секцію CHANNELS
-            in_channels = False
-            new_lines = []
-            
-            for line in lines:
-                if 'CHANNELS = {' in line:
-                    in_channels = True
-                    new_lines.append(line)
-                    
-                    # Вставляємо оновлені канали
-                    for mapping in mappings:
-                        new_lines.append(f'    "{mapping["channel_name"]}": "{mapping["channel_id"]}",\n')
-                    continue
-                
-                if in_channels and '}' in line and 'CHANNELS' not in line:
-                    new_lines.append(line)
-                    in_channels = False
-                    continue
-                
-                if not in_channels:
-                    new_lines.append(line)
-            
-            # Записуємо назад
-            with open('config.py', 'w', encoding='utf-8') as f:
-                f.writelines(new_lines)
-            
-            print("✅ config.py оновлено!")
+        if db.add_channel(channel_name, channel_id):
+            print(f"✅ Додано: {channel_name} → {channel_id}")
         else:
-            print("ℹ️ Немає змін каналів в БД")
-            
-    except Exception as e:
-        print(f"❌ Помилка: {e}")
-    finally:
-        cursor.close()
+            print(f"❌ Помилка: {channel_name}")
+    
+    print("\n📋 Всі канали в БД:")
+    all_channels = db.get_all_channels()
+    for name, ch_id in all_channels.items():
+        print(f"   • {name}: {ch_id}")
+    
+    print("\n✅ Готово!")
 
-if __name__ == '__main__':
-    sync_channels_from_db()
+if __name__ == "__main__":
+    add_channels()

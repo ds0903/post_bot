@@ -1,27 +1,21 @@
 import bcrypt
+import os
+from dotenv import load_dotenv
 
-BOT_TOKEN = "8441270675:AAGfOb3bTu_brfhj5OBAViV8yxfxnyx14DA"
+load_dotenv()
 
-ADMIN_PASSWORD_HASH = "$2b$12$qNYVPGWH6gnDoq06ralvF.8u4cV0FH205pcXcc4NrZLLyqGVEPyCW"  # ds0903
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+
+ADMIN_PASSWORD = os.getenv('ADMIN_PASSWORD', 'ds0903')
+ADMIN_PASSWORD_HASH = bcrypt.hashpw(ADMIN_PASSWORD.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 DB_CONFIG = {
-    'host': 'localhost',
-    'database': 'telegram_bot_db',
-    'user': 'danil',
-    'password': 'danilus15',
-    'port': 5432
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'database': os.getenv('DB_NAME', 'telegram_bot_db'),
+    'user': os.getenv('DB_USER', 'danil'),
+    'password': os.getenv('DB_PASSWORD', 'danilus15'),
+    'port': int(os.getenv('DB_PORT', 5432))
 }
 
-
-CHANNELS = {
-    "Канал 1 - Новини": "@test_test_0903",
-    "Канал 2 - Мемси": "@your_channel_2",
-    "Канал 3 - Технології": "@your_channel_3",
-    "Канал 4 - Спорт": "@your_channel_4",
-    "Канал 5 - Музика": "@your_channel_5",
-    "Канал 6 - Кіно": "@your_channel_6",
-    "Канал 7 - Ігри": "@your_channel_7",
-    "Канал 8 - Їжа": "@your_channel_8",
-    "Канал 9 - Подорожі": "@your_channel_9",
-    "Канал 10 - Освіта": "@your_channel_10",
-}
+POST_TIME_CHECK_ENABLED = os.getenv('POST_TIME_CHECK_ENABLED', 'true').lower() == 'true'
+POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 15))
