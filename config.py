@@ -16,6 +16,3 @@ DB_CONFIG = {
     'password': os.getenv('DB_PASSWORD', 'danilus15'),
     'port': int(os.getenv('DB_PORT', 5432))
 }
-
-POST_TIME_CHECK_ENABLED = os.getenv('POST_TIME_CHECK_ENABLED', 'true').lower() == 'true'
-POST_DELAY_MINUTES = int(os.getenv('POST_DELAY_MINUTES', 15))
