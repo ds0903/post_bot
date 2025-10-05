@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -30,6 +30,11 @@ class UserStates(StatesGroup):
 
 class AdminStates(StatesGroup):
     in_admin_panel = State()
+    selecting_channel_for_requests = State()
+
+class ChannelReplaceStates(StatesGroup):
+    selecting_channel_to_replace = State()
+    entering_new_channel = State()
 
 def get_channels_keyboard():
     buttons = []
@@ -41,7 +46,15 @@ def get_admin_menu_keyboard():
     buttons = [
         [KeyboardButton(text="📋 Заявки на модерацію")],
         [KeyboardButton(text="📊 Історія заявок")],
+        [KeyboardButton(text="🔄 Замінити канал")],
         [KeyboardButton(text="🚪 Вийти з адмінки")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_main_menu_keyboard():
+    buttons = [
+        [KeyboardButton(text="✍️ Написати пост")],
+        [KeyboardButton(text="🔄 Замінити канал")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -61,13 +74,80 @@ def get_moderation_keyboard(post_id: int):
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_channels_with_requests_keyboard():
+    """Клавіатура з каналами, що мають заявки"""
+    channels = db.get_channels_with_pending_posts()
+    if not channels:
+        return None
+    buttons = []
+    for channel in channels:
+        buttons.append([KeyboardButton(text=channel)])
+    buttons.append([KeyboardButton(text="🔙 Назад")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_replace_channel_keyboard():
+    """Клавіатура для вибору каналу для заміни"""
+    buttons = []
+    for channel_name in CHANNELS.keys():
+        buttons.append([KeyboardButton(text=channel_name)])
+    buttons.append([KeyboardButton(text="🔙 Назад")])
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+def get_confirm_replace_keyboard():
+    """Клавіатура підтвердження заміни каналу"""
+    buttons = [
+        [KeyboardButton(text="✅ Підтвердити заміну")],
+        [KeyboardButton(text="❌ Скасувати")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
 @dp.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, command: CommandObject):
     user_id = message.from_user.id
     username = message.from_user.username or "без_ніка"
     db.add_user(user_id, username)
-    await message.answer("👋 Вітаю! Оберіть канал:", reply_markup=get_channels_keyboard())
-    await state.set_state(UserStates.waiting_for_channel)
+    
+    # Перевіряємо чи є параметр з каналом
+    if command.args:
+        channel_param_raw = command.args.strip()
+        
+        # Шукаємо канал за назвою або ID
+        channel_found = None
+        
+        # 1. Спочатку шукаємо за назвою каналу (з заміною _ на пробіли)
+        channel_param_name = channel_param_raw.replace('_', ' ')
+        for channel_name in CHANNELS.keys():
+            if channel_name.lower() == channel_param_name.lower() or channel_param_name.lower() in channel_name.lower():
+                channel_found = channel_name
+                break
+        
+        # 2. Якщо не знайшли за назвою, шукаємо за ID каналу (БЕЗ заміни підкреслень!)
+        if not channel_found:
+            # Додаємо @ якщо його немає
+            search_id = channel_param_raw if channel_param_raw.startswith('@') else f'@{channel_param_raw}'
+            for channel_name, channel_id in CHANNELS.items():
+                if channel_id.lower() == search_id.lower():
+                    channel_found = channel_name
+                    break
+        
+        if channel_found:
+            await state.update_data(channel=channel_found)
+            await message.answer(
+                f"👋 Вітаю!\n\n✅ Канал встановлено: <b>{channel_found}</b>\n\nОбери дію:",
+                reply_markup=get_main_menu_keyboard(),
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                "❌ Канал не знайдено.\n\n💡 Зверніться до адміністратора за правильним посиланням.",
+                reply_markup=ReplyKeyboardRemove()
+            )
+    else:
+        # Якщо параметра немає - нічого не показуємо, бо користувач має отримати спец-посилання
+        await message.answer(
+            "❌ Доступ заборонено.\n\n💡 Використовуйте спеціальне посилання, яке вам надав адміністратор.",
+            reply_markup=ReplyKeyboardRemove()
+        )
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
@@ -101,6 +181,21 @@ async def cmd_admin(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer(f"❌ Помилка: {e}")
 
+@dp.message(F.text == "✍️ Написати пост")
+async def write_post_button(message: Message, state: FSMContext):
+    data = await state.get_data()
+    if not data.get('channel'):
+        await message.answer("Оберіть канал спочатку:", reply_markup=get_channels_keyboard())
+        await state.set_state(UserStates.waiting_for_channel)
+        return
+    
+    await message.answer(
+        f"✅ Канал: <b>{data['channel']}</b>\n\nНадішли пост:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML"
+    )
+    await state.set_state(UserStates.waiting_for_post)
+
 @dp.message(UserStates.waiting_for_channel)
 async def handle_channel_selection(message: Message, state: FSMContext):
     channel = message.text
@@ -109,11 +204,11 @@ async def handle_channel_selection(message: Message, state: FSMContext):
         return
     await state.update_data(channel=channel)
     await message.answer(
-        f"✅ Канал: <b>{channel}</b>\n\nНадішли пост:",
-        reply_markup=ReplyKeyboardRemove(),
+        f"✅ Канал: <b>{channel}</b>\n\nОбери дію:",
+        reply_markup=get_main_menu_keyboard(),
         parse_mode="HTML"
     )
-    await state.set_state(UserStates.waiting_for_post)
+    await state.clear()
 
 @dp.message(UserStates.waiting_for_post)
 async def handle_post_content(message: Message, state: FSMContext):
@@ -216,29 +311,64 @@ async def confirm_and_send_post(message: Message, state: FSMContext):
         msg_data['text'] = data['text_content']
     
     post_id = db.add_post(user_id, username, channel, msg_data)
-    await message.answer(f"✅ Відправлено! Заявка #{post_id}", reply_markup=ReplyKeyboardRemove(), parse_mode="HTML")
-    await state.clear()
+    await message.answer(
+        f"✅ Відправлено! Заявка #{post_id}\n\nОбери дію:",
+        reply_markup=get_main_menu_keyboard(),
+        parse_mode="HTML"
+    )
+    await state.update_data(channel=channel)
 
 @dp.message(UserStates.confirming_post, F.text == "🔄 Заповнити заново")
 async def restart_post_creation(message: Message, state: FSMContext):
-    await message.answer("🔄 Заново!\n\nОбери канал:", reply_markup=get_channels_keyboard())
-    await state.set_state(UserStates.waiting_for_channel)
+    data = await state.get_data()
+    channel = data.get('channel')
+    await message.answer(
+        f"🔄 Заново!\n\n✅ Канал: <b>{channel}</b>\n\nНадішли пост:",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML"
+    )
+    await state.set_state(UserStates.waiting_for_post)
+
+# ============= АДМІН: ЗАЯВКИ З ВИБОРОМ КАНАЛУ =============
 
 @dp.message(AdminStates.in_admin_panel, F.text == "📋 Заявки на модерацію")
-async def show_pending_posts(message: Message):
-    pending_posts = db.get_pending_posts()
+async def show_pending_posts_channels(message: Message, state: FSMContext):
+    keyboard = get_channels_with_requests_keyboard()
+    if not keyboard:
+        await message.answer("Немає заявок на модерацію.")
+        return
+    
+    await message.answer("Оберіть канал для перегляду заявок:", reply_markup=keyboard)
+    await state.set_state(AdminStates.selecting_channel_for_requests)
+
+@dp.message(AdminStates.selecting_channel_for_requests, F.text == "🔙 Назад")
+async def back_to_admin_menu_from_channels(message: Message, state: FSMContext):
+    await message.answer("Адмін панель:", reply_markup=get_admin_menu_keyboard())
+    await state.set_state(AdminStates.in_admin_panel)
+
+@dp.message(AdminStates.selecting_channel_for_requests)
+async def show_pending_posts_by_channel(message: Message, state: FSMContext):
+    selected_channel = message.text
+    
+    if selected_channel not in CHANNELS:
+        await message.answer("❌ Оберіть канал зі списку:", reply_markup=get_channels_with_requests_keyboard())
+        return
+    
+    pending_posts = db.get_pending_posts_by_channel(selected_channel)
+    
     if not pending_posts:
-        await message.answer("Немає заявок.")
+        await message.answer(f"Немає заявок для каналу '{selected_channel}'.", reply_markup=get_channels_with_requests_keyboard())
         return
     
     from aiogram.types import InputMediaPhoto, InputMediaVideo
+    
+    await message.answer(f"📋 Заявки для каналу: <b>{selected_channel}</b>", parse_mode="HTML", reply_markup=get_admin_menu_keyboard())
     
     for post in pending_posts:
         post_id, user_id, username, channel, msg_data, created_at = post
         text = f"🆔 #{post_id}\n👤 @{username}\n📢 {channel}\n🕒 {created_at}"
         
         if msg_data.get('media_group'):
-            # Відправляємо альбом одним повідомленням
             media_group = []
             caption_text = msg_data.get('caption', '')
             
@@ -262,6 +392,8 @@ async def show_pending_posts(message: Message):
         else:
             full_text = text + "\n\n" + msg_data.get('text', '')
             await message.answer(full_text, reply_markup=get_moderation_keyboard(post_id))
+    
+    await state.set_state(AdminStates.in_admin_panel)
 
 @dp.message(AdminStates.in_admin_panel, F.text == "📊 Історія заявок")
 async def show_history(message: Message):
@@ -274,6 +406,132 @@ async def show_history(message: Message):
         status_emoji = "✅" if post[3] == "approved" else "❌"
         text += f"{status_emoji} #{post[0]} | @{post[1]} → {post[2]}\n"
     await message.answer(text)
+
+# ============= ЗАМІНА КАНАЛУ =============
+
+@dp.message(F.text == "🔄 Замінити канал")
+async def replace_channel_start(message: Message, state: FSMContext):
+    await message.answer(
+        "Оберіть канал, який хочете замінити:",
+        reply_markup=get_replace_channel_keyboard()
+    )
+    await state.set_state(ChannelReplaceStates.selecting_channel_to_replace)
+
+@dp.message(AdminStates.in_admin_panel, F.text == "🔄 Замінити канал")
+async def replace_channel_start_admin(message: Message, state: FSMContext):
+    await message.answer(
+        "Оберіть канал, який хочете замінити:",
+        reply_markup=get_replace_channel_keyboard()
+    )
+    await state.set_state(ChannelReplaceStates.selecting_channel_to_replace)
+
+@dp.message(ChannelReplaceStates.selecting_channel_to_replace, F.text == "🔙 Назад")
+async def back_from_replace(message: Message, state: FSMContext):
+    data = await state.get_data()
+    # Перевіряємо чи це адмін
+    user_id = message.from_user.id
+    if db.is_admin(user_id):
+        await message.answer("Адмін панель:", reply_markup=get_admin_menu_keyboard())
+        await state.set_state(AdminStates.in_admin_panel)
+    else:
+        await message.answer("Головне меню:", reply_markup=get_main_menu_keyboard())
+        await state.clear()
+
+@dp.message(ChannelReplaceStates.selecting_channel_to_replace)
+async def channel_selected_for_replace(message: Message, state: FSMContext):
+    old_channel_name = message.text
+    
+    if old_channel_name not in CHANNELS:
+        await message.answer("❌ Оберіть канал зі списку:", reply_markup=get_replace_channel_keyboard())
+        return
+    
+    await state.update_data(old_channel_name=old_channel_name, old_channel_id=CHANNELS[old_channel_name])
+    await message.answer(
+        f"Ви обрали канал: <b>{old_channel_name}</b> ({CHANNELS[old_channel_name]})\n\n"
+        f"Введіть нове посилання на канал (наприклад: @new_channel або https://t.me/new_channel):",
+        reply_markup=ReplyKeyboardRemove(),
+        parse_mode="HTML"
+    )
+    await state.set_state(ChannelReplaceStates.entering_new_channel)
+
+@dp.message(ChannelReplaceStates.entering_new_channel, F.text == "✅ Підтвердити заміну")
+async def confirm_channel_replace(message: Message, state: FSMContext):
+    data = await state.get_data()
+    old_channel_name = data.get('old_channel_name')
+    new_channel_id = data.get('new_channel_id')
+    
+    if not old_channel_name or not new_channel_id:
+        await message.answer("❌ Помилка: дані не знайдено. Спробуйте ще раз.")
+        return
+    
+    # Оновлюємо канал в конфігу
+    CHANNELS[old_channel_name] = new_channel_id
+    
+    # Зберігаємо зміни в БД
+    db.update_channel(old_channel_name, new_channel_id)
+    
+    user_id = message.from_user.id
+    is_admin = db.is_admin(user_id)
+    
+    await message.answer(
+        f"✅ <b>Канал успішно замінено!</b>\n\n"
+        f"Канал: <b>{old_channel_name}</b>\n"
+        f"Нове посилання: {new_channel_id}\n\n"
+        f"⚠️ <b>ВАЖЛИВО:</b> Не забудьте додати бота до нового каналу та надати йому права адміністратора!",
+        reply_markup=get_admin_menu_keyboard() if is_admin else get_main_menu_keyboard(),
+        parse_mode="HTML"
+    )
+    
+    if is_admin:
+        await state.set_state(AdminStates.in_admin_panel)
+    else:
+        await state.clear()
+
+@dp.message(ChannelReplaceStates.entering_new_channel, F.text == "❌ Скасувати")
+async def cancel_channel_replace(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    is_admin = db.is_admin(user_id)
+    
+    await message.answer(
+        "❌ Заміну скасовано.",
+        reply_markup=get_admin_menu_keyboard() if is_admin else get_main_menu_keyboard()
+    )
+    
+    if is_admin:
+        await state.set_state(AdminStates.in_admin_panel)
+    else:
+        await state.clear()
+
+@dp.message(ChannelReplaceStates.entering_new_channel)
+async def new_channel_entered(message: Message, state: FSMContext):
+    new_channel_link = message.text.strip()
+    
+    # Перевірка формату
+    if not (new_channel_link.startswith('@') or 't.me/' in new_channel_link):
+        await message.answer("❌ Невірний формат! Введіть посилання у форматі @channel або https://t.me/channel")
+        return
+    
+    # Нормалізуємо посилання до формату @channel
+    if 't.me/' in new_channel_link:
+        new_channel_id = '@' + new_channel_link.split('t.me/')[-1].strip('/')
+    else:
+        new_channel_id = new_channel_link
+    
+    data = await state.get_data()
+    old_channel_name = data['old_channel_name']
+    old_channel_id = data['old_channel_id']
+    
+    await state.update_data(new_channel_id=new_channel_id)
+    
+    await message.answer(
+        f"📝 <b>Підтвердження заміни:</b>\n\n"
+        f"Старий канал: <b>{old_channel_name}</b>\n"
+        f"Старе посилання: {old_channel_id}\n\n"
+        f"➡️ Нове посилання: {new_channel_id}\n\n"
+        f"Підтвердіть заміну:",
+        reply_markup=get_confirm_replace_keyboard(),
+        parse_mode="HTML"
+    )
 
 @dp.message(AdminStates.in_admin_panel, F.text == "🚪 Вийти з адмінки")
 async def exit_admin(message: Message, state: FSMContext):

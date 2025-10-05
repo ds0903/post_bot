@@ -56,6 +56,15 @@ class Database:
         """)
         
         cursor.execute("""
+            CREATE TABLE IF NOT EXISTS channel_mappings (
+                id SERIAL PRIMARY KEY,
+                channel_name VARCHAR(255) UNIQUE NOT NULL,
+                channel_id VARCHAR(255) NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_posts_status 
             ON posts(status)
         """)
@@ -63,6 +72,11 @@ class Database:
         cursor.execute("""
             CREATE INDEX IF NOT EXISTS idx_posts_user_id 
             ON posts(user_id)
+        """)
+        
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_posts_channel 
+            ON posts(channel)
         """)
         
         cursor.close()
@@ -158,6 +172,54 @@ class Database:
         finally:
             cursor.close()
     
+    def get_pending_posts_by_channel(self, channel: str):
+        """Отримати заявки тільки для конкретного каналу"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                SELECT id, user_id, username, channel, message_data, created_at
+                FROM posts 
+                WHERE status = 'pending' AND channel = %s
+                ORDER BY created_at ASC
+            """, (channel,))
+            
+            rows = cursor.fetchall()
+            result = []
+            for row in rows:
+                result.append((
+                    row['id'],
+                    row['user_id'],
+                    row['username'],
+                    row['channel'],
+                    row['message_data'],
+                    row['created_at'].strftime('%Y-%m-%d %H:%M:%S')
+                ))
+            return result
+        except Exception as e:
+            print(f"Помилка отримання заявок по каналу: {e}")
+            return []
+        finally:
+            cursor.close()
+    
+    def get_channels_with_pending_posts(self):
+        """Отримати список каналів, які мають заявки на модерацію"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                SELECT DISTINCT channel
+                FROM posts 
+                WHERE status = 'pending'
+                ORDER BY channel
+            """)
+            
+            rows = cursor.fetchall()
+            return [row['channel'] for row in rows]
+        except Exception as e:
+            print(f"Помилка отримання каналів з заявками: {e}")
+            return []
+        finally:
+            cursor.close()
+    
     def get_post_by_id(self, post_id: int):
         cursor = self.get_cursor()
         try:
@@ -241,6 +303,41 @@ class Database:
             return cursor.fetchone()
         except Exception as e:
             print(f"Помилка отримання статистики: {e}")
+            return None
+        finally:
+            cursor.close()
+    
+    def update_channel(self, channel_name: str, new_channel_id: str):
+        """Оновити посилання на канал"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                INSERT INTO channel_mappings (channel_name, channel_id, updated_at) 
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (channel_name) DO UPDATE 
+                SET channel_id = EXCLUDED.channel_id, 
+                    updated_at = CURRENT_TIMESTAMP
+            """, (channel_name, new_channel_id))
+            print(f"✅ Канал '{channel_name}' оновлено на '{new_channel_id}'")
+        except Exception as e:
+            print(f"Помилка оновлення каналу: {e}")
+        finally:
+            cursor.close()
+    
+    def get_channel_mapping(self, channel_name: str):
+        """Отримати актуальне посилання на канал"""
+        cursor = self.get_cursor()
+        try:
+            cursor.execute("""
+                SELECT channel_id
+                FROM channel_mappings 
+                WHERE channel_name = %s
+            """, (channel_name,))
+            
+            row = cursor.fetchone()
+            return row['channel_id'] if row else None
+        except Exception as e:
+            print(f"Помилка отримання маппінгу каналу: {e}")
             return None
         finally:
             cursor.close()
